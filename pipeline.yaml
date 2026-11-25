@@ -1,100 +1,164 @@
 
 
 pipeline:
-  id: app_build_verify2
-  name: SpringBoot Build and Verify
-  description: Automated CI for Spring Boot applications with lint, secret scan, build, tests, SAST and SCA quality gates.
-  inputs:
-    branch:
-      type: string
-      required: true
-      description: Branch of the application repository to build
-  clone:
-    enabled: true
-    connector: connector_Github_3a28
-    repo: Orion-user1/app-build-verify
-    ref:
-      type: branch
-      name: ${{ inputs.branch }}
+  name: App Package and Publish
+  identifier: cicd_app_package_and_publish
+  description: Builds the demo JAR, versions, packages, checksums, generates an SBOM, signs and publishes artifacts to Artifactory.
+  projectIdentifier: Demo_project
+  orgIdentifier: default
+  tags:
+    ai_generated: ""
+  properties:
+    ci:
+      codebase:
+        connectorRef: Demo_code
+        repoName: Dem_ci
+        build: <+input>
   stages:
-    - id: build_and_verify
-      name: Build and Verify
-      runtime: cloud
-      platform:
-        os: linux
-        arch: amd64
-      steps:
-        - id: clone_devops_automation
-          name: Clone DevOps Automation
-          template:
-            uses: gitCloneStep
-            with:
-              connector: connector_Github_3a28
-              repo_name: DevOps/devops-automation
-              build:
-                target: Git Branch
-                branch: main
-              clone_directory: /harness/devops-automation
-        - id: lint
-          name: Lint
-          run:
-            script: |
-              echo "Running code quality checks..."
-              python3 devops-automation/scripts/lint.py
-        - id: secret_scan
-          name: Secret Scan
-          run:
-            script: |
-              echo "Scanning for exposed secrets..."
-              python3 devops-automation/scripts/secret_scan.py
-        - id: dependencies
-          name: Install Dependencies
-          run:
-            script: |
-              echo "Resolving dependencies from JFrog Artifactory..."
-              mvn dependency:resolve -B
-        - id: build
-          name: Build
-          run:
-            script: |
-              echo "Building application..."
-              mvn clean package -DskipTests -B
-              echo "Build complete:"
-              ls -lh target/*.jar
+    - stage:
+        name: App Package and Publish
+        identifier: app_package_publish
+        type: CI
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: MarkAsFailure
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Build JAR
+                  identifier: build_jar
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Building JAR artifact..."
+                      if [ -f pom.xml ]; then
+                        mvn -B -q package -DskipTests
+                        cp "$(ls target/*.jar | grep -v original | head -n 1)" ./demo.jar
+                      elif [ -f gradlew ]; then
+                        chmod +x gradlew
+                        ./gradlew build -x test
+                        cp "$(ls build/libs/*.jar | head -n 1)" ./demo.jar
+                      elif [ -f demo.jar ]; then
+                        echo "Using demo.jar from repository"
+                      else
+                        echo "ERROR: no pom.xml, gradlew or demo.jar found in repository"
+                        exit 1
+                      fi
+              - step:
+                  type: Run
+                  name: Verify JAR Artifact
+                  identifier: verify_jar_artifact
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Verifying JAR artifact..."
 
-              echo "Saving JAR for publish pipeline..."
-              mkdir -p /harness/outputs
-              cp target/*.jar /harness/outputs/demo.jar
+                      if [ ! -f ./demo.jar ]; then
+                        echo "ERROR: JAR artifact not found"
+                        exit 1
+                      fi
 
-              cat > /harness/outputs/build-info.json <<EOF
-              {
-                "jarFile": "demo.jar",
-                "jarPath": "/harness/outputs/demo.jar",
-                "commitSha": "${{ codebase.commitSha }}",
-                "branch": "${{ codebase.branch }}",
-                "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-              }
-              EOF
+                      echo "BUILD_ID=<+pipeline.executionId>" >> "$HARNESS_ENV"
+                      echo "COMMIT_SHA=<+codebase.commitSha>" >> "$HARNESS_ENV"
+                      echo "BRANCH=<+codebase.branch>" >> "$HARNESS_ENV"
+                      echo "JAR_FILE=demo.jar" >> "$HARNESS_ENV"
 
-              echo "JAR saved at: /harness/outputs/demo.jar"
-              echo "Metadata: /harness/outputs/build-info.json"
-        - id: tests
-          name: Unit Tests
-          run-test:
-            script: |
-              echo "Running unit tests..."
-              mvn test -B
-        - id: coverity
-          name: Coverity SAST
-          run:
-            script: |
-              echo "Running Coverity SAST scan..."
-              python3 devops-automation/scripts/coverity.py
-        - id: blackduck
-          name: Black Duck SCA
-          if: ${{ codebase.prNumber != "" }}
-          run:
-            script: |
-              echo "Running Black Duck SCA scan..."
-              python3 devops-automation/scripts/blackduck.py
-              echo "Results uploaded to Black Duck SRM"
+                      echo "JAR artifact verified!"
+              - step:
+                  type: Run
+                  name: Set Version
+                  identifier: set_version
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Generating semantic version..."
+
+                      export BUILD_NUMBER="${BUILD_ID}"
+                      export BRANCH_NAME="${BRANCH}"
+                      export PR_LABEL="${PR_LABEL:-patch}"
+
+                      python3 scripts/set_version.py
+
+                      VERSION=$(cat version.txt)
+                      echo "VERSION=$VERSION" >> "$HARNESS_ENV"
+                      echo "Version: $VERSION"
+              - step:
+                  type: Run
+                  name: Prepare Package
+                  identifier: prepare_package
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Preparing application package..."
+                      python3 scripts/package_app.py
+              - step:
+                  type: Run
+                  name: Package Deploy Template
+                  identifier: package_deploy_template
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Packaging deployment templates..."
+                      python3 scripts/package_deploy_template.py
+              - step:
+                  type: Run
+                  name: Generate Checksums
+                  identifier: checksum
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Generating SHA256 checksums..."
+                      python3 scripts/checksum.py
+              - step:
+                  type: Run
+                  name: Create SBOM
+                  identifier: create_sbom
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Generating SBOM..."
+                      python3 scripts/create_sbom.py
+              - step:
+                  type: Run
+                  name: Sign Packages
+                  identifier: sign_package
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Signing packages..."
+                      python3 scripts/sign_package.py
+              - step:
+                  type: Run
+                  name: Publish to Artifactory
+                  identifier: publish_package
+                  spec:
+                    shell: Bash
+                    command: |
+                      echo "Publishing artifacts to JFrog..."
+
+                      if [ -z "${JFROG_USERNAME}" ] || [ -z "${JFROG_PASSWORD}" ]; then
+                        echo "ERROR: JFROG_USERNAME / JFROG_PASSWORD are not set"
+                        exit 1
+                      fi
+
+                      export ARTIFACTORY_URL="${JFROG_URL:-https://artifactory.company.com}"
+                      export ARTIFACTORY_USERNAME="${JFROG_USERNAME}"
+                      export ARTIFACTORY_PASSWORD="${JFROG_PASSWORD}"
+                      export ARTIFACTORY_REPO="${JFROG_REPO:-libs-release-local}"
+                      export APP_NAME="${APP_NAME:-demo}"
+
+                      python3 scripts/publish_package.py
+
+                      echo "Artifacts URL: ${ARTIFACTORY_URL}/${ARTIFACTORY_REPO}/${APP_NAME}/${VERSION}/"
