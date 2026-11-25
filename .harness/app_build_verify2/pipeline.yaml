@@ -1,0 +1,22 @@
+pipeline:
+  id: app_build_verify2
+  name: app-build-verify2
+  description: Clone the repository and run a Hello World step.
+  tags:
+    ai_generated: ""
+  clone:
+    enabled: true
+    connector: connector_Github_3a28
+    repo: orioctrl696/Harness-test
+    ref:
+      type: branch
+      name: main
+  stages:
+  - id: Build
+    name: Build
+    runtime: cloud
+    steps:
+    - id: Hello_World
+      name: Hello_World
+      run:
+        script: echo "Hello World"
