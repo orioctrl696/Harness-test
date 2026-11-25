@@ -1,5 +1,5 @@
 pipeline:
-  id: harness_app_build_verify_v2
+  id: app_build_verify2
   name: SpringBoot Build and Verify
   description: Automated CI for Spring Boot applications with lint, secret scan, build, tests, SAST and SCA quality gates.
   inputs:
@@ -10,7 +10,7 @@ pipeline:
   clone:
     enabled: true
     connector: connector_Github_3a28
-    repo: cicd-app-build-and-verify
+    repo: Orion-user1/app-build-verify
     ref:
       type: branch
       name: ${{ inputs.branch }}
