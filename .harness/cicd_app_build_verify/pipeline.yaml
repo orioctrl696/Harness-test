@@ -1,0 +1,22 @@
+pipeline:
+  name: cicd_app_build_verify
+  identifier: cicd_app_build_verify
+  projectIdentifier: Harness_demo
+  orgIdentifier: default
+  tags: {}
+  stages:
+    - stage:
+        name: Build
+        identifier: Build
+        type: CI
+        spec:
+          cloneCodebase: true
+          execution:
+            steps:
+              - step:
+                  type: Run
+                  name: Hello_World
+                  identifier: Hello_World
+                  spec:
+                    shell: Sh
+                    command: echo "Hello World"

@@ -1,0 +1,17 @@
+inputSet:
+  name: trigger-target-branch
+  identifier: trigger_target_branch
+  pipeline:
+    identifier: cicd_app_build_verify
+    stages:
+      - stage:
+          identifier: Build
+          type: CI
+          spec:
+            execution:
+              steps:
+                - step:
+                    identifier: Hello_World
+                    type: Run
+                    spec:
+                      command: echo "Triggered from selected branch"
