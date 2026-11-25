@@ -1,22 +1,98 @@
 pipeline:
-  id: app_build_verify2
-  name: app-build-verify2
-  description: Clone the repository and run a Hello World step.
-  tags:
-    ai_generated: ""
+  id: harness_app_build_verify_v2
+  name: SpringBoot Build and Verify
+  description: Automated CI for Spring Boot applications with lint, secret scan, build, tests, SAST and SCA quality gates.
+  inputs:
+    branch:
+      type: string
+      required: true
+      description: Branch of the application repository to build
   clone:
     enabled: true
     connector: connector_Github_3a28
-    repo: orioctrl696/Harness-test
+    repo: cicd-app-build-and-verify
     ref:
       type: branch
-      name: main
+      name: ${{ inputs.branch }}
   stages:
-  - id: Build
-    name: Build
-    runtime: cloud
-    steps:
-    - id: Hello_World
-      name: Hello_World
-      run:
-        script: echo "Hello World"
+    - id: build_and_verify
+      name: Build and Verify
+      runtime: cloud
+      platform:
+        os: linux
+        arch: amd64
+      steps:
+        - id: clone_devops_automation
+          name: Clone DevOps Automation
+          template:
+            uses: gitCloneStep
+            with:
+              connector: connector_Github_3a28
+              repo_name: DevOps/devops-automation
+              build:
+                target: Git Branch
+                branch: main
+              clone_directory: /harness/devops-automation
+        - id: lint
+          name: Lint
+          run:
+            script: |
+              echo "Running code quality checks..."
+              python3 devops-automation/scripts/lint.py
+        - id: secret_scan
+          name: Secret Scan
+          run:
+            script: |
+              echo "Scanning for exposed secrets..."
+              python3 devops-automation/scripts/secret_scan.py
+        - id: dependencies
+          name: Install Dependencies
+          run:
+            script: |
+              echo "Resolving dependencies from JFrog Artifactory..."
+              mvn dependency:resolve -B
+        - id: build
+          name: Build
+          run:
+            script: |
+              echo "Building application..."
+              mvn clean package -DskipTests -B
+              echo "Build complete:"
+              ls -lh target/*.jar
+
+              echo "Saving JAR for publish pipeline..."
+              mkdir -p /harness/outputs
+              cp target/*.jar /harness/outputs/demo.jar
+
+              cat > /harness/outputs/build-info.json <<EOF
+              {
+                "jarFile": "demo.jar",
+                "jarPath": "/harness/outputs/demo.jar",
+                "commitSha": "${{ codebase.commitSha }}",
+                "branch": "${{ codebase.branch }}",
+                "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+              }
+              EOF
+
+              echo "JAR saved at: /harness/outputs/demo.jar"
+              echo "Metadata: /harness/outputs/build-info.json"
+        - id: tests
+          name: Unit Tests
+          run-test:
+            script: |
+              echo "Running unit tests..."
+              mvn test -B
+        - id: coverity
+          name: Coverity SAST
+          run:
+            script: |
+              echo "Running Coverity SAST scan..."
+              python3 devops-automation/scripts/coverity.py
+        - id: blackduck
+          name: Black Duck SCA
+          if: ${{ codebase.prNumber != "" }}
+          run:
+            script: |
+              echo "Running Black Duck SCA scan..."
+              python3 devops-automation/scripts/blackduck.py
+              echo "Results uploaded to Black Duck SRM"
